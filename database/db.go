@@ -22,7 +22,7 @@ var (
 
 // InitMySQL initializes MySQL connection for music catalog
 func InitMySQL() error {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&multiStatements=true",
 		os.Getenv("MYSQL_USER"),
 		os.Getenv("MYSQL_PASSWORD"),
 		os.Getenv("MYSQL_HOST"),
@@ -165,6 +165,17 @@ func initMySQLSchema() error {
 		`CREATE TABLE IF NOT EXISTS genres (
 		id INT AUTO_INCREMENT PRIMARY KEY,
 		name VARCHAR(100) NOT NULL UNIQUE
+	);`,
+		// Minimal plays table to support trigger-based stats updates
+		`CREATE TABLE IF NOT EXISTS plays (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		user_id VARCHAR(64) NULL,
+		track_id INT NOT NULL,
+		played_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE,
+		INDEX idx_user (user_id),
+		INDEX idx_track (track_id),
+		INDEX idx_played_at (played_at)
 	);`,
 	}
 

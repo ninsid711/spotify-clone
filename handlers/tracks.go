@@ -394,6 +394,16 @@ func RecordPlay(c *gin.Context) {
 	// Record in Neo4j for recommendations
 	go recordPlayInNeo4j(userID.(string), trackID, track.ArtistID, track.Genre)
 
+	// Insert play record in MySQL
+	_, err = database.MySQL.Exec(
+		"INSERT INTO plays (user_id, track_id, played_at) VALUES (?, ?, ?)",
+		userID, trackID, time.Now(),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to record play in MySQL"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Play recorded successfully"})
 }
 

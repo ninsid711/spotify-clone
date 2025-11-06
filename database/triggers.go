@@ -101,6 +101,15 @@ func createTriggers(ctx context.Context) error {
 			
 			DELETE FROM track_stats WHERE track_id = OLD.id;
 		END`,
+		// New trigger: update track_stats on play insert
+		`DROP TRIGGER IF EXISTS after_play_insert`,
+		`CREATE TRIGGER after_play_insert
+		AFTER INSERT ON plays
+		FOR EACH ROW
+		UPDATE track_stats
+		SET play_count = play_count + 1,
+			last_played = NEW.played_at
+		WHERE track_id = NEW.track_id`,
 	}
 
 	for _, trigger := range triggers {
