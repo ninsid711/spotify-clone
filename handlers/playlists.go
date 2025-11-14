@@ -1,15 +1,12 @@
 package handlers
 
 import (
-	"context"
+	"database/sql"
 	"net/http"
 	"spotify-clone/database"
 	"spotify-clone/models"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // CreatePlaylist creates a new playlist
@@ -26,28 +23,27 @@ func CreatePlaylist(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	result, err := database.MySQL.Exec(`
+		INSERT INTO playlists (user_id, name, description, is_public)
+		VALUES (?, ?, ?, ?)`,
+		userID, req.Name, req.Description, req.IsPublic)
 
-	playlist := models.Playlist{
-		UserID:      userID.(string),
-		Name:        req.Name,
-		Description: req.Description,
-		TrackIDs:    []int{},
-		IsPublic:    req.IsPublic,
-		CoverURL:    "",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-
-	collection := database.MongoDB.Collection("playlists")
-	result, err := collection.InsertOne(ctx, playlist)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create playlist"})
 		return
 	}
 
-	playlist.ID = result.InsertedID.(primitive.ObjectID).Hex()
+	playlistID, _ := result.LastInsertId()
+
+	playlist := models.Playlist{
+		ID:          int(playlistID),
+		UserID:      userID.(int),
+		Name:        req.Name,
+		Description: req.Description,
+		IsPublic:    req.IsPublic,
+		TrackIDs:    []int{},
+	}
+
 	c.JSON(http.StatusCreated, playlist)
 }
 
@@ -59,21 +55,36 @@ func GetUserPlaylists(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	rows, err := database.MySQL.Query(`
+		SELECT id, name, description, is_public, cover_url, created_at, updated_at
+		FROM playlists WHERE user_id = ?
+		ORDER BY updated_at DESC`, userID)
 
-	collection := database.MongoDB.Collection("playlists")
-	cursor, err := collection.Find(ctx, bson.M{"user_id": userID.(string)})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch playlists"})
 		return
 	}
-	defer cursor.Close(ctx)
+	defer rows.Close()
 
-	var playlists []models.Playlist
-	if err = cursor.All(ctx, &playlists); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode playlists"})
-		return
+	playlists := []models.Playlist{}
+	for rows.Next() {
+		var playlist models.Playlist
+		rows.Scan(&playlist.ID, &playlist.Name, &playlist.Description, &playlist.IsPublic,
+			&playlist.CoverURL, &playlist.CreatedAt, &playlist.UpdatedAt)
+		playlist.UserID = userID.(int)
+
+		// Get track count
+		var trackIDs []int
+		trackRows, _ := database.MySQL.Query("SELECT track_id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position", playlist.ID)
+		for trackRows.Next() {
+			var trackID int
+			trackRows.Scan(&trackID)
+			trackIDs = append(trackIDs, trackID)
+		}
+		trackRows.Close()
+		playlist.TrackIDs = trackIDs
+
+		playlists = append(playlists, playlist)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"playlists": playlists})
@@ -88,33 +99,51 @@ func GetPlaylistByID(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	var playlist models.Playlist
+	err := database.MySQL.QueryRow(`
+		SELECT id, user_id, name, description, is_public, cover_url, created_at, updated_at
+		FROM playlists WHERE id = ?`, playlistID).Scan(
+		&playlist.ID, &playlist.UserID, &playlist.Name, &playlist.Description,
+		&playlist.IsPublic, &playlist.CoverURL, &playlist.CreatedAt, &playlist.UpdatedAt)
 
-	objectID, err := primitive.ObjectIDFromHex(playlistID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid playlist ID"})
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Playlist not found"})
 		return
 	}
-
-	collection := database.MongoDB.Collection("playlists")
-	var playlist models.Playlist
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&playlist)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Playlist not found"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch playlist"})
 		return
 	}
 
 	// Check if user has access (owner or public playlist)
-	if playlist.UserID != userID.(string) && !playlist.IsPublic {
+	if playlist.UserID != userID.(int) && !playlist.IsPublic {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
-	// Fetch track details from MySQL
+	// Fetch track details
 	tracks := []models.Track{}
-	if len(playlist.TrackIDs) > 0 {
-		tracks = getTracksByIDs(playlist.TrackIDs)
+	rows, err := database.MySQL.Query(`
+		SELECT t.id, t.title, t.artist_id, a.name as artist_name,
+		       t.album_id, al.title as album_name, t.duration,
+		       t.genre, t.release_date, t.file_url, t.cover_url, t.created_at
+		FROM playlist_tracks pt
+		JOIN tracks t ON pt.track_id = t.id
+		JOIN artists a ON t.artist_id = a.id
+		JOIN albums al ON t.album_id = al.id
+		WHERE pt.playlist_id = ?
+		ORDER BY pt.position`, playlistID)
+
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var track models.Track
+			rows.Scan(&track.ID, &track.Title, &track.ArtistID, &track.ArtistName,
+				&track.AlbumID, &track.AlbumName, &track.Duration, &track.Genre,
+				&track.ReleaseDate, &track.FileURL, &track.CoverURL, &track.CreatedAt)
+			tracks = append(tracks, track)
+			playlist.TrackIDs = append(playlist.TrackIDs, track.ID)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -138,7 +167,7 @@ func AddTrackToPlaylist(c *gin.Context) {
 		return
 	}
 
-	// Verify track exists in MySQL
+	// Verify track exists
 	var trackExists bool
 	err := database.MySQL.QueryRow("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ?)", req.TrackID).Scan(&trackExists)
 	if err != nil || !trackExists {
@@ -146,41 +175,36 @@ func AddTrackToPlaylist(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	objectID, err := primitive.ObjectIDFromHex(playlistID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid playlist ID"})
-		return
-	}
-
-	collection := database.MongoDB.Collection("playlists")
-
 	// Check if user owns the playlist
-	var playlist models.Playlist
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&playlist)
-	if err != nil {
+	var ownerID int
+	err = database.MySQL.QueryRow("SELECT user_id FROM playlists WHERE id = ?", playlistID).Scan(&ownerID)
+	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Playlist not found"})
 		return
 	}
-
-	if playlist.UserID != userID.(string) {
+	if ownerID != userID.(int) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
-	// Add track to playlist (avoid duplicates)
-	update := bson.M{
-		"$addToSet": bson.M{"track_ids": req.TrackID},
-		"$set":      bson.M{"updated_at": time.Now()},
-	}
+	// Get current max position
+	var maxPosition int
+	database.MySQL.QueryRow("SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE playlist_id = ?", playlistID).Scan(&maxPosition)
 
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
+	// Add track to playlist
+	_, err = database.MySQL.Exec(`
+		INSERT INTO playlist_tracks (playlist_id, track_id, position)
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE position = VALUES(position)`,
+		playlistID, req.TrackID, maxPosition+1)
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add track to playlist"})
 		return
 	}
+
+	// Update playlist updated_at
+	database.MySQL.Exec("UPDATE playlists SET updated_at = NOW() WHERE id = ?", playlistID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Track added to playlist successfully"})
 }
@@ -195,41 +219,27 @@ func RemoveTrackFromPlaylist(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	objectID, err := primitive.ObjectIDFromHex(playlistID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid playlist ID"})
-		return
-	}
-
-	collection := database.MongoDB.Collection("playlists")
-
 	// Check if user owns the playlist
-	var playlist models.Playlist
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&playlist)
-	if err != nil {
+	var ownerID int
+	err := database.MySQL.QueryRow("SELECT user_id FROM playlists WHERE id = ?", playlistID).Scan(&ownerID)
+	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Playlist not found"})
 		return
 	}
-
-	if playlist.UserID != userID.(string) {
+	if ownerID != userID.(int) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
 	// Remove track from playlist
-	update := bson.M{
-		"$pull": bson.M{"track_ids": trackID},
-		"$set":  bson.M{"updated_at": time.Now()},
-	}
-
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
+	_, err = database.MySQL.Exec("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?", playlistID, trackID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove track from playlist"})
 		return
 	}
+
+	// Update playlist updated_at
+	database.MySQL.Exec("UPDATE playlists SET updated_at = NOW() WHERE id = ?", playlistID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Track removed from playlist successfully"})
 }
@@ -243,32 +253,20 @@ func DeletePlaylist(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	objectID, err := primitive.ObjectIDFromHex(playlistID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid playlist ID"})
-		return
-	}
-
-	collection := database.MongoDB.Collection("playlists")
-
 	// Check if user owns the playlist
-	var playlist models.Playlist
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&playlist)
-	if err != nil {
+	var ownerID int
+	err := database.MySQL.QueryRow("SELECT user_id FROM playlists WHERE id = ?", playlistID).Scan(&ownerID)
+	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Playlist not found"})
 		return
 	}
-
-	if playlist.UserID != userID.(string) {
+	if ownerID != userID.(int) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
-	// Delete playlist
-	_, err = collection.DeleteOne(ctx, bson.M{"_id": objectID})
+	// Delete playlist (CASCADE will delete playlist_tracks)
+	_, err = database.MySQL.Exec("DELETE FROM playlists WHERE id = ?", playlistID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete playlist"})
 		return
@@ -292,93 +290,29 @@ func UpdatePlaylist(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	objectID, err := primitive.ObjectIDFromHex(playlistID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid playlist ID"})
-		return
-	}
-
-	collection := database.MongoDB.Collection("playlists")
-
 	// Check if user owns the playlist
-	var playlist models.Playlist
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&playlist)
-	if err != nil {
+	var ownerID int
+	err := database.MySQL.QueryRow("SELECT user_id FROM playlists WHERE id = ?", playlistID).Scan(&ownerID)
+	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Playlist not found"})
 		return
 	}
-
-	if playlist.UserID != userID.(string) {
+	if ownerID != userID.(int) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
 	// Update playlist
-	update := bson.M{
-		"$set": bson.M{
-			"name":        req.Name,
-			"description": req.Description,
-			"is_public":   req.IsPublic,
-			"updated_at":  time.Now(),
-		},
-	}
+	_, err = database.MySQL.Exec(`
+		UPDATE playlists 
+		SET name = ?, description = ?, is_public = ?, updated_at = NOW()
+		WHERE id = ?`,
+		req.Name, req.Description, req.IsPublic, playlistID)
 
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update playlist"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Playlist updated successfully"})
-}
-
-// getTracksByIDs fetches multiple tracks by their IDs from MySQL
-func getTracksByIDs(trackIDs []int) []models.Track {
-	if len(trackIDs) == 0 {
-		return []models.Track{}
-	}
-
-	query := `
-		SELECT t.id, t.title, t.artist_id, a.name as artist_name, 
-		       t.album_id, al.title as album_name, t.duration, 
-		       t.genre, t.release_date, t.file_url, t.cover_url, t.created_at
-		FROM tracks t
-		JOIN artists a ON t.artist_id = a.id
-		JOIN albums al ON t.album_id = al.id
-		WHERE t.id IN (?` + string(make([]byte, len(trackIDs)-1)) + `)
-	`
-
-	// Build placeholders
-	args := make([]interface{}, len(trackIDs))
-	for i, id := range trackIDs {
-		args[i] = id
-		if i > 0 {
-			query = query[:len(query)-1] + ",?)"
-		}
-	}
-
-	rows, err := database.MySQL.Query(query, args...)
-	if err != nil {
-		return []models.Track{}
-	}
-	defer rows.Close()
-
-	tracks := []models.Track{}
-	for rows.Next() {
-		var track models.Track
-		err := rows.Scan(
-			&track.ID, &track.Title, &track.ArtistID, &track.ArtistName,
-			&track.AlbumID, &track.AlbumName, &track.Duration,
-			&track.Genre, &track.ReleaseDate, &track.FileURL,
-			&track.CoverURL, &track.CreatedAt,
-		)
-		if err == nil {
-			tracks = append(tracks, track)
-		}
-	}
-
-	return tracks
 }

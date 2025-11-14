@@ -44,47 +44,48 @@ type Genre struct {
 	Name string `json:"name"`
 }
 
-// MongoDB Models - User Profiles and Preferences
+// MySQL Models - All data in MySQL
 
 type User struct {
-	ID                string             `json:"id" bson:"_id,omitempty"`
-	Email             string             `json:"email" bson:"email"`
-	Password          string             `json:"-" bson:"password"` // Never expose in JSON
-	Username          string             `json:"username" bson:"username"`
-	DisplayName       string             `json:"display_name" bson:"display_name"`
-	ProfilePictureURL string             `json:"profile_picture_url" bson:"profile_picture_url"`
-	Preferences       UserPreferences    `json:"preferences" bson:"preferences"`
-	ListeningHistory  []ListeningHistory `json:"listening_history" bson:"listening_history"`
-	FavoriteArtists   []int              `json:"favorite_artists" bson:"favorite_artists"`
-	FavoriteGenres    []string           `json:"favorite_genres" bson:"favorite_genres"`
-	CreatedAt         time.Time          `json:"created_at" bson:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at" bson:"updated_at"`
+	ID                int       `json:"id"`
+	Email             string    `json:"email"`
+	Password          string    `json:"-"` // Never expose in JSON
+	Username          string    `json:"username"`
+	DisplayName       string    `json:"display_name"`
+	ProfilePictureURL string    `json:"profile_picture_url"`
+	Theme             string    `json:"theme"`
+	Language          string    `json:"language"`
+	ExplicitContent   bool      `json:"explicit_content"`
+	FavoriteGenres    []string  `json:"favorite_genres"`
+	FavoriteArtists   []int     `json:"favorite_artists"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type UserPreferences struct {
-	Theme           string   `json:"theme" bson:"theme"` // light, dark
-	Language        string   `json:"language" bson:"language"`
-	ExplicitContent bool     `json:"explicit_content" bson:"explicit_content"`
-	PreferredGenres []string `json:"preferred_genres" bson:"preferred_genres"`
+	Theme           string   `json:"theme"` // light, dark
+	Language        string   `json:"language"`
+	ExplicitContent bool     `json:"explicit_content"`
+	PreferredGenres []string `json:"preferred_genres"`
 }
 
 type ListeningHistory struct {
-	TrackID   int       `json:"track_id" bson:"track_id"`
-	PlayedAt  time.Time `json:"played_at" bson:"played_at"`
-	Duration  int       `json:"duration" bson:"duration"` // How long they listened in seconds
-	Completed bool      `json:"completed" bson:"completed"`
+	TrackID        int       `json:"track_id"`
+	PlayedAt       time.Time `json:"played_at"`
+	DurationPlayed int       `json:"duration_played"` // How long they listened in seconds
+	Completed      bool      `json:"completed"`
 }
 
 type Playlist struct {
-	ID          string    `json:"id" bson:"_id,omitempty"`
-	UserID      string    `json:"user_id" bson:"user_id"`
-	Name        string    `json:"name" bson:"name"`
-	Description string    `json:"description" bson:"description"`
-	TrackIDs    []int     `json:"track_ids" bson:"track_ids"`
-	IsPublic    bool      `json:"is_public" bson:"is_public"`
-	CoverURL    string    `json:"cover_url" bson:"cover_url"`
-	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
+	ID          int       `json:"id"`
+	UserID      int       `json:"user_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	TrackIDs    []int     `json:"track_ids"`
+	IsPublic    bool      `json:"is_public"`
+	CoverURL    string    `json:"cover_url"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Request/Response Models

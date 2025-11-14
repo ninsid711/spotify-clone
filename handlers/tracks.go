@@ -1,18 +1,13 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
 	"net/http"
 	"spotify-clone/database"
 	"spotify-clone/models"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // GetTracks returns a list of tracks with pagination
@@ -330,7 +325,7 @@ func Search(c *gin.Context) {
 	})
 }
 
-// RecordPlay records a track play in user's listening history and Neo4j
+// RecordPlay records a track play in user's listening history
 func RecordPlay(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -345,10 +340,10 @@ func RecordPlay(c *gin.Context) {
 	}
 
 	// Get track info from MySQL
-	var track models.Track
+	var duration int
 	err = database.MySQL.QueryRow(
-		"SELECT id, title, artist_id, genre, duration FROM tracks WHERE id = ?", trackID,
-	).Scan(&track.ID, &track.Title, &track.ArtistID, &track.Genre, &track.Duration)
+		"SELECT duration FROM tracks WHERE id = ?", trackID,
+	).Scan(&duration)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Track not found"})
@@ -359,45 +354,10 @@ func RecordPlay(c *gin.Context) {
 		return
 	}
 
-	// Record in MongoDB
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	objectID, _ := primitive.ObjectIDFromHex(userID.(string))
-	collection := database.MongoDB.Collection("users")
-
-	historyEntry := models.ListeningHistory{
-		TrackID:   trackID,
-		PlayedAt:  time.Now(),
-		Duration:  track.Duration,
-		Completed: true,
-	}
-
-	update := bson.M{
-		"$push": bson.M{
-			"listening_history": bson.M{
-				"$each":  []models.ListeningHistory{historyEntry},
-				"$slice": -100, // Keep only last 100 plays
-			},
-		},
-		"$set": bson.M{
-			"updated_at": time.Now(),
-		},
-	}
-
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to record play"})
-		return
-	}
-
-	// Record in Neo4j for recommendations
-	go recordPlayInNeo4j(userID.(string), trackID, track.ArtistID, track.Genre)
-
 	// Insert play record in MySQL
 	_, err = database.MySQL.Exec(
-		"INSERT INTO plays (user_id, track_id, played_at) VALUES (?, ?, ?)",
-		userID, trackID, time.Now(),
+		"INSERT INTO plays (user_id, track_id, played_at, duration_played, completed) VALUES (?, ?, NOW(), ?, TRUE)",
+		userID, trackID, duration,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to record play in MySQL"})
@@ -405,42 +365,4 @@ func RecordPlay(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Play recorded successfully"})
-}
-
-// recordPlayInNeo4j records the play relationship in Neo4j
-func recordPlayInNeo4j(userID string, trackID, artistID int, genre string) {
-	ctx := context.Background()
-	session := database.Neo4j.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(ctx)
-
-	query := `
-		MERGE (u:User {id: $userId})
-		MERGE (t:Track {id: $trackId})
-		MERGE (a:Artist {id: $artistId})
-		MERGE (g:Genre {name: $genre})
-		
-		MERGE (t)-[:BY_ARTIST]->(a)
-		MERGE (t)-[:HAS_GENRE]->(g)
-		
-		MERGE (u)-[p:PLAYED]->(t)
-		ON CREATE SET p.count = 1, p.lastPlayed = datetime()
-		ON MATCH SET p.count = p.count + 1, p.lastPlayed = datetime()
-		
-		MERGE (u)-[l:LIKES_ARTIST]->(a)
-		ON CREATE SET l.count = 1
-		ON MATCH SET l.count = l.count + 1
-		
-		MERGE (u)-[lg:LIKES_GENRE]->(g)
-		ON CREATE SET lg.count = 1
-		ON MATCH SET lg.count = lg.count + 1
-	`
-
-	params := map[string]interface{}{
-		"userId":   userID,
-		"trackId":  trackID,
-		"artistId": artistID,
-		"genre":    genre,
-	}
-
-	session.Run(ctx, query, params)
 }

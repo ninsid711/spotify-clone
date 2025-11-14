@@ -42,10 +42,10 @@ func AuthMiddleware() gin.HandlerFunc {
 }
 
 // GetUserID retrieves the user ID from context
-func GetUserID(c *gin.Context) (string, bool) {
+func GetUserID(c *gin.Context) (int, bool) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		return "", false
+		return 0, false
 	}
-	return userID.(string), true
+	return userID.(int), true
 }

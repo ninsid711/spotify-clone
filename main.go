@@ -17,17 +17,9 @@ func main() {
 		log.Println("Warning: .env file not found, using system environment variables")
 	}
 
-	// Initialize databases
+	// Initialize MySQL database
 	if err := database.InitMySQL(); err != nil {
 		log.Fatalf("Failed to connect to MySQL: %v", err)
-	}
-
-	if err := database.InitMongoDB(); err != nil {
-		log.Fatalf("Failed to connect to MongoDB: %v", err)
-	}
-
-	if err := database.InitNeo4j(); err != nil {
-		log.Fatalf("Failed to connect to Neo4j: %v", err)
 	}
 
 	defer database.Close()
@@ -53,10 +45,8 @@ func main() {
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"status":  "ok",
-			"mysql":   database.MySQL != nil,
-			"mongodb": database.MongoDB != nil,
-			"neo4j":   database.Neo4j != nil,
+			"status": "ok",
+			"mysql":  database.MySQL != nil,
 		})
 	})
 
@@ -131,8 +121,8 @@ func main() {
 			// Recording plays
 			protected.POST("/tracks/:id/play", handlers.RecordPlay)
 
-			// Personalized recommendations
-			protected.GET("/recommendations", handlers.GetRecommendations)
+			// Personalized recommendations (disabled for now)
+			// protected.GET("/recommendations", handlers.GetRecommendations)
 		}
 	}
 

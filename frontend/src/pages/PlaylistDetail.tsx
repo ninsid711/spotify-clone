@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { playlistsAPI, tracksAPI } from '../services/api';
+import { playlistsAPI } from '../services/api';
 import { Playlist, Track } from '../types';
 import './PlaylistDetail.css';
 
@@ -22,7 +22,7 @@ const PlaylistDetail: React.FC = () => {
     setIsLoading(true);
     try {
       const response = await playlistsAPI.getPlaylistById(id);
-      setPlaylist(response.data);
+      setPlaylist(response.data.playlist);
       setTracks(response.data.tracks || []);
     } catch (error) {
       console.error('Failed to load playlist:', error);

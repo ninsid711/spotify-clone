@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 	"spotify-clone/database"
 	"spotify-clone/models"
@@ -9,9 +8,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -23,15 +19,11 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	// Check if user already exists
-	collection := database.MongoDB.Collection("users")
-	var existingUser models.User
-	err := collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&existingUser)
+	var existingID int
+	err := database.MySQL.QueryRow("SELECT id FROM users WHERE email = ? OR username = ?", req.Email, req.Username).Scan(&existingID)
 	if err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "User with this email already exists"})
+		c.JSON(http.StatusConflict, gin.H{"error": "User with this email or username already exists"})
 		return
 	}
 
@@ -43,48 +35,50 @@ func Register(c *gin.Context) {
 	}
 
 	// Create user
-	user := models.User{
-		Email:       req.Email,
-		Password:    string(hashedPassword),
-		Username:    req.Username,
-		DisplayName: req.DisplayName,
-		Preferences: models.UserPreferences{
-			Theme:           "dark",
-			Language:        "en",
-			ExplicitContent: true,
-			PreferredGenres: req.Genres,
-		},
-		FavoriteGenres:   req.Genres,
-		ListeningHistory: []models.ListeningHistory{},
-		FavoriteArtists:  []int{},
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
-	}
+	result, err := database.MySQL.Exec(`
+		INSERT INTO users (email, password, username, display_name, theme, language, explicit_content)
+		VALUES (?, ?, ?, ?, 'dark', 'en', TRUE)`,
+		req.Email, string(hashedPassword), req.Username, req.DisplayName)
 
-	result, err := collection.InsertOne(ctx, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
 
-	userID := result.InsertedID.(primitive.ObjectID).Hex()
-	user.ID = userID
-
-	// Create user node in Neo4j for recommendations
-	if err := createUserNodeInNeo4j(userID, req.Genres); err != nil {
-		// Log error but don't fail the registration
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize recommendation system"})
+	userID, err := result.LastInsertId()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user ID"})
 		return
 	}
 
+	// Add favorite genres
+	if len(req.Genres) > 0 {
+		for _, genre := range req.Genres {
+			database.MySQL.Exec("INSERT INTO user_favorite_genres (user_id, genre) VALUES (?, ?)", userID, genre)
+		}
+	}
+
 	// Generate token
-	token, err := utils.GenerateToken(userID, user.Email)
+	token, err := utils.GenerateToken(int(userID), req.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
 	}
 
-	user.Password = "" // Don't send password in response
+	// Fetch the created user
+	user := models.User{
+		ID:              int(userID),
+		Email:           req.Email,
+		Username:        req.Username,
+		DisplayName:     req.DisplayName,
+		Theme:           "dark",
+		Language:        "en",
+		ExplicitContent: true,
+		FavoriteGenres:  req.Genres,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+
 	c.JSON(http.StatusCreated, models.AuthResponse{
 		Token: token,
 		User:  user,
@@ -99,23 +93,36 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	// Find user
-	collection := database.MongoDB.Collection("users")
 	var user models.User
-	err := collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&user)
+	var hashedPassword string
+	err := database.MySQL.QueryRow(`
+		SELECT id, email, password, username, display_name, profile_picture_url, 
+		       theme, language, explicit_content, created_at, updated_at
+		FROM users WHERE email = ?`, req.Email).Scan(
+		&user.ID, &user.Email, &hashedPassword, &user.Username, &user.DisplayName,
+		&user.ProfilePictureURL, &user.Theme, &user.Language, &user.ExplicitContent,
+		&user.CreatedAt, &user.UpdatedAt)
+
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 		return
 	}
 
 	// Verify password
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
+	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password))
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 		return
+	}
+
+	// Fetch favorite genres
+	rows, _ := database.MySQL.Query("SELECT genre FROM user_favorite_genres WHERE user_id = ?", user.ID)
+	defer rows.Close()
+	for rows.Next() {
+		var genre string
+		rows.Scan(&genre)
+		user.FavoriteGenres = append(user.FavoriteGenres, genre)
 	}
 
 	// Generate token
@@ -125,7 +132,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	user.Password = "" // Don't send password in response
 	c.JSON(http.StatusOK, models.AuthResponse{
 		Token: token,
 		User:  user,
@@ -140,24 +146,29 @@ func GetProfile(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	objectID, err := primitive.ObjectIDFromHex(userID.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
-	}
-
-	collection := database.MongoDB.Collection("users")
 	var user models.User
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user)
+	err := database.MySQL.QueryRow(`
+		SELECT id, email, username, display_name, profile_picture_url, 
+		       theme, language, explicit_content, created_at, updated_at
+		FROM users WHERE id = ?`, userID).Scan(
+		&user.ID, &user.Email, &user.Username, &user.DisplayName,
+		&user.ProfilePictureURL, &user.Theme, &user.Language, &user.ExplicitContent,
+		&user.CreatedAt, &user.UpdatedAt)
+
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
 
-	user.Password = ""
+	// Fetch favorite genres
+	rows, _ := database.MySQL.Query("SELECT genre FROM user_favorite_genres WHERE user_id = ?", userID)
+	defer rows.Close()
+	for rows.Next() {
+		var genre string
+		rows.Scan(&genre)
+		user.FavoriteGenres = append(user.FavoriteGenres, genre)
+	}
+
 	c.JSON(http.StatusOK, user)
 }
 
@@ -175,51 +186,23 @@ func UpdatePreferences(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Update user preferences
+	_, err := database.MySQL.Exec(`
+		UPDATE users 
+		SET theme = ?, language = ?, explicit_content = ?, updated_at = NOW()
+		WHERE id = ?`,
+		prefs.Theme, prefs.Language, prefs.ExplicitContent, userID)
 
-	objectID, err := primitive.ObjectIDFromHex(userID.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
-	}
-
-	collection := database.MongoDB.Collection("users")
-	update := bson.M{
-		"$set": bson.M{
-			"preferences": prefs,
-			"updated_at":  time.Now(),
-		},
-	}
-
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update preferences"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Preferences updated successfully"})
-}
-
-// createUserNodeInNeo4j creates a user node in Neo4j for recommendations
-func createUserNodeInNeo4j(userID string, genres []string) error {
-	ctx := context.Background()
-	session := database.Neo4j.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(ctx)
-
-	query := `
-		CREATE (u:User {id: $userId})
-		WITH u
-		UNWIND $genres AS genre
-		MERGE (g:Genre {name: genre})
-		CREATE (u)-[:PREFERS]->(g)
-	`
-
-	params := map[string]interface{}{
-		"userId": userID,
-		"genres": genres,
+	// Update favorite genres
+	database.MySQL.Exec("DELETE FROM user_favorite_genres WHERE user_id = ?", userID)
+	for _, genre := range prefs.PreferredGenres {
+		database.MySQL.Exec("INSERT INTO user_favorite_genres (user_id, genre) VALUES (?, ?)", userID, genre)
 	}
 
-	_, err := session.Run(ctx, query, params)
-	return err
+	c.JSON(http.StatusOK, gin.H{"message": "Preferences updated successfully"})
 }
