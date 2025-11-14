@@ -1,0 +1,50 @@
+.recommendations-container {
+  padding: 20px 0;
+}
+
+.recommendations-header {
+  margin-bottom: 40px;
+}
+
+.recommendations-header h1 {
+  font-size: 3rem;
+  font-weight: 900;
+  margin-bottom: 12px;
+}
+
+.recommendations-header p {
+  font-size: 1.2rem;
+  color: var(--text-secondary);
+}
+
+.tracks-section {
+  margin-bottom: 60px;
+}
+
+.tracks-section h2 {
+  font-size: 2rem;
+  margin-bottom: 24px;
+  font-weight: 700;
+}
+
+.tracks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 24px;
+}
+
+@media (max-width: 768px) {
+  .recommendations-header h1 {
+    font-size: 2rem;
+  }
+
+  .recommendations-header p {
+    font-size: 1rem;
+  }
+
+  .tracks-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 16px;
+  }
+}
+

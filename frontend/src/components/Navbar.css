@@ -1,0 +1,120 @@
+.navbar {
+  background-color: var(--surface-color);
+  padding: 16px 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.navbar-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.navbar-brand {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--primary-color);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.navbar-links {
+  display: flex;
+  gap: 24px;
+  flex: 1;
+  justify-content: center;
+}
+
+.nav-link {
+  color: var(--text-primary);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.2s;
+  white-space: nowrap;
+}
+
+.nav-link:hover {
+  color: var(--primary-color);
+}
+
+.navbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.user-name {
+  color: var(--text-bright);
+  font-weight: 500;
+}
+
+.btn-login,
+.btn-register {
+  padding: 8px 24px;
+  border-radius: 500px;
+  text-decoration: none;
+  font-weight: 700;
+  transition: all 0.2s;
+}
+
+.btn-login {
+  color: var(--text-bright);
+}
+
+.btn-login:hover {
+  color: var(--primary-color);
+  transform: scale(1.05);
+}
+
+.btn-register {
+  background-color: var(--primary-color);
+  color: var(--surface-color);
+}
+
+.btn-register:hover {
+  background-color: #4c9be6;
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(97, 175, 239, 0.3);
+}
+
+.btn-logout {
+  background-color: transparent;
+  border: 1px solid var(--text-secondary);
+  color: var(--text-primary);
+  padding: 8px 24px;
+  border-radius: 500px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-logout:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  transform: scale(1.05);
+}
+
+@media (max-width: 768px) {
+  .navbar-container {
+    flex-wrap: wrap;
+  }
+
+  .navbar-links {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    padding-top: 10px;
+  }
+
+  .user-name {
+    display: none;
+  }
+}
+
