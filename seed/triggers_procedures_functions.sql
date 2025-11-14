@@ -1,9 +1,7 @@
 -- Spotify Clone - Triggers, Procedures, and Functions
 -- This file contains advanced MySQL database objects for the music catalog
 
--- ======================
 -- UTILITY TABLES
--- ======================
 
 -- Create a table to track album statistics (needed for triggers)
 CREATE TABLE IF NOT EXISTS album_stats (
@@ -22,9 +20,7 @@ CREATE TABLE IF NOT EXISTS track_stats (
     FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
 
--- ======================
 -- TRIGGER 1: Update Album Stats When Track is Added
--- ======================
 DELIMITER $$
 
 DROP TRIGGER IF EXISTS after_track_insert$$
@@ -46,9 +42,7 @@ END$$
 
 DELIMITER ;
 
--- ======================
 -- TRIGGER 2: Update Album Stats When Track is Deleted
--- ======================
 DELIMITER $$
 
 DROP TRIGGER IF EXISTS after_track_delete$$
@@ -68,9 +62,9 @@ END$$
 
 DELIMITER ;
 
--- ======================
+
 -- FUNCTION 1: Calculate Album Total Duration
--- ======================
+
 DELIMITER $$
 
 DROP FUNCTION IF EXISTS get_album_duration$$
@@ -91,9 +85,8 @@ END$$
 
 DELIMITER ;
 
--- ======================
 -- PROCEDURE 1: Add Track with Validation
--- ======================
+
 DELIMITER $$
 
 DROP PROCEDURE IF EXISTS add_track$$
@@ -147,9 +140,7 @@ END$$
 
 DELIMITER ;
 
--- ======================
 -- PROCEDURE 2: Get Artist Statistics
--- ======================
 DELIMITER $$
 
 DROP PROCEDURE IF EXISTS get_artist_stats$$
@@ -185,9 +176,7 @@ END$$
 
 DELIMITER ;
 
--- ======================
 -- INITIALIZE EXISTING DATA
--- ======================
 
 -- Initialize album_stats for existing tracks
 INSERT INTO album_stats (album_id, track_count, total_duration)
